@@ -1,37 +1,7 @@
-export interface DriverInfo {
-  user_id: string;
-  username: string;
-  camera_id: string;
-}
-
-export interface RegisteredMessage {
-  type: "REGISTERED";
-  user_id: string;
-  username: string;
-  camera_id: string;
-  status: string;
-}
-
-export interface DetectionStatusMessage {
-  type: "DETECTION_STATUS";
-  status: "NORMAL" | "DROWSY";
-  ear?: number;
-  timestamp?: string;
-}
-
-export interface DrowsinessAlertMessage {
-  type: "DROWSINESS_ALERT";
-  status: "DROWSY";
-  ear?: number;
-  closed_duration?: number;
-  message?: string;
-  timestamp?: string;
-}
-
-export type BackendMessage =
-  | RegisteredMessage
-  | DetectionStatusMessage
-  | DrowsinessAlertMessage;
+import type {
+  BackendMessage,
+  DriverInfo,
+} from "@/types/detection";
 
 export class DriverWebSocket {
   private socket: WebSocket | null = null;
@@ -54,16 +24,23 @@ export class DriverWebSocket {
     this.socket = new WebSocket(this.url);
 
     this.socket.onopen = () => {
-      console.log("WebSocket connected:", this.url);
+      console.log(
+        "WebSocket connected:",
+        this.url
+      );
 
       onOpen?.();
     };
 
     this.socket.onmessage = (event) => {
       try {
-        const message: BackendMessage = JSON.parse(event.data);
+        const message: BackendMessage =
+          JSON.parse(event.data);
 
-        console.log("Backend message:", message);
+        console.log(
+          "Backend message:",
+          message
+        );
 
         onMessage?.(message);
       } catch (error) {
@@ -75,52 +52,67 @@ export class DriverWebSocket {
     };
 
     this.socket.onerror = (error) => {
-      console.error("WebSocket error:", error);
+      console.error(
+        "WebSocket error:",
+        error
+      );
 
       onError?.(error);
     };
 
     this.socket.onclose = () => {
-      console.log("WebSocket disconnected");
+      console.log(
+        "WebSocket disconnected"
+      );
 
       onClose?.();
     };
   }
 
   startStream(driver: DriverInfo) {
-  if (!this.socket) {
-    console.error("WebSocket is not initialized.");
-    return;
+    if (!this.socket) {
+      console.error(
+        "WebSocket is not initialized."
+      );
+      return;
+    }
+
+    if (
+      this.socket.readyState !==
+      WebSocket.OPEN
+    ) {
+      console.error(
+        "WebSocket is not open."
+      );
+      return;
+    }
+
+    const startStreamMessage = {
+      type: "START_STREAM",
+      user_id: driver.user_id,
+      user_name: driver.username,
+      camera_id: driver.camera_id,
+    };
+
+    console.log(
+      "Sending START_STREAM:",
+      startStreamMessage
+    );
+
+    this.socket.send(
+      JSON.stringify(startStreamMessage)
+    );
   }
-
-  if (this.socket.readyState !== WebSocket.OPEN) {
-    console.error("WebSocket is not open.");
-    return;
-  }
-
-  const startStreamMessage = {
-  type: "START_STREAM",
-  user_id: driver.user_id,
-  user_name: driver.username,
-  camera_id: driver.camera_id,
-};
-
-  console.log(
-    "Sending START_STREAM:",
-    startStreamMessage
-  );
-
-  this.socket.send(
-    JSON.stringify(startStreamMessage)
-  );
-}
 
   sendFrame(frame: ArrayBuffer) {
     if (!this.socket) {
       return;
     }
 
-    if (this.socket.readyState !== WebSocket.OPEN) {
+    if (
+      this.socket.readyState !==
+      WebSocket.OPEN
+    ) {
       return;
     }
 
@@ -136,7 +128,8 @@ export class DriverWebSocket {
 
   isConnected() {
     return (
-      this.socket?.readyState === WebSocket.OPEN
+      this.socket?.readyState ===
+      WebSocket.OPEN
     );
   }
 }
