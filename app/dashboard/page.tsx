@@ -6,7 +6,8 @@ import { DriverWebSocket } from "@/lib/websocket";
 import type {
   BackendMessage,
   ConnectionStatus,
-  DriverStatus,
+  DrowsinessStatus,
+  PhoneStatus,
 } from "@/types/detection";
 
 interface Driver {
@@ -21,21 +22,60 @@ export default function DashboardPage() {
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("DISCONNECTED");
 
-  const [driverStatus, setDriverStatus] =
-    useState<DriverStatus>("NORMAL");
+  // ============================================================
+  // DROWSINESS DOMAIN STATE
+  // ============================================================
 
-  const [ear, setEar] = useState<number | null>(null);
+  const [drowsinessStatus, setDrowsinessStatus] =
+    useState<DrowsinessStatus>("NORMAL");
 
-  const [alertActive, setAlertActive] =
+  const [drowsinessAlertActive, setDrowsinessAlertActive] =
     useState(false);
 
-  const [alertMessage, setAlertMessage] =
+  const [drowsinessAlertMessage, setDrowsinessAlertMessage] =
     useState("No active alerts.");
 
-  const [alertTime, setAlertTime] =
+  const [drowsinessAlertTime, setDrowsinessAlertTime] =
     useState<string | null>(null);
 
-  const [closedDuration, setClosedDuration] =
+  const [drowsinessEar, setDrowsinessEar] =
+    useState<number | null>(null);
+
+  const [drowsinessClosedDuration, setDrowsinessClosedDuration] =
+    useState<number | null>(null);
+
+  const [drowsinessConfidence, setDrowsinessConfidence] =
+    useState<number | null>(null);
+
+  const [drowsinessPeakConfidence, setDrowsinessPeakConfidence] =
+    useState<number | null>(null);
+
+  // Latches independently of React state so the WebSocket
+  // message handler (captured once in the effect below) always
+  // sees the up-to-date value instead of a stale closure.
+  const drowsinessAlertActiveRef =
+    useRef(false);
+
+  // ============================================================
+  // PHONE DOMAIN STATE
+  // ============================================================
+
+  const [phoneStatus, setPhoneStatus] =
+    useState<PhoneStatus>("NORMAL");
+
+  const [phoneAlertActive, setPhoneAlertActive] =
+    useState(false);
+
+  const [phoneAlertMessage, setPhoneAlertMessage] =
+    useState("No active alerts.");
+
+  const [phoneAlertTime, setPhoneAlertTime] =
+    useState<string | null>(null);
+
+  const [phoneConfidence, setPhoneConfidence] =
+    useState<number | null>(null);
+
+  const [phonePeakConfidence, setPhonePeakConfidence] =
     useState<number | null>(null);
 
   const audioContextRef =
@@ -175,24 +215,11 @@ export default function DashboardPage() {
     message
   );
 
-  // NORMAL
-  if (
-    "state" in message &&
-    message.state === "normal"
-  ) {
-    console.log(
-      "🟢 Driver returned to NORMAL"
-    );
-
-    setDriverStatus("NORMAL");
-    setAlertActive(false);
-    setAlertMessage("No active alerts.");
-    setClosedDuration(null);
-
-    return;
-  }
-
-  // DROWSINESS
+  // ==========================================================
+  // DROWSINESS ALERT — ONLY affects the drowsiness domain.
+  // Starts/latches the alert. Only DROWSINESS_CLEARED (below)
+  // is allowed to clear it.
+  // ==========================================================
   if (
     "type" in message &&
     message.type === "DROWSINESS_ALERT"
@@ -202,30 +229,48 @@ export default function DashboardPage() {
       message
     );
 
-    setDriverStatus("DROWSY");
+    drowsinessAlertActiveRef.current = true;
 
-    setAlertActive(true);
+    setDrowsinessStatus("DROWSY");
 
-    setAlertMessage(
+    setDrowsinessAlertActive(true);
+
+    setDrowsinessAlertMessage(
       message.message ||
+        message.label ||
         "Driver drowsiness detected — immediate attention required."
     );
 
-    setAlertTime(
+    setDrowsinessAlertTime(
       message.timestamp ||
         new Date().toISOString()
     );
 
-    if (message.ear !== undefined) {
-      setEar(message.ear);
+    if (
+      message.ear !== undefined &&
+      message.ear !== null
+    ) {
+      setDrowsinessEar(message.ear);
     }
 
     if (
-      message.closed_duration !==
-      undefined
+      message.closed_duration !== undefined &&
+      message.closed_duration !== null
     ) {
-      setClosedDuration(
+      setDrowsinessClosedDuration(
         message.closed_duration
+      );
+    }
+
+    if (message.confidence !== undefined) {
+      setDrowsinessConfidence(message.confidence);
+    }
+
+    if (
+      message.peak_confidence !== undefined
+    ) {
+      setDrowsinessPeakConfidence(
+        message.peak_confidence
       );
     }
 
@@ -234,21 +279,141 @@ export default function DashboardPage() {
     return;
   }
 
-  // DETECTION STATUS
+  // ==========================================================
+  // DROWSINESS CLEARED — ONLY affects the drowsiness domain.
+  // The ONLY event allowed to transition an active drowsiness
+  // alert back to NORMAL.
+  // ==========================================================
+  if (
+    "type" in message &&
+    message.type === "DROWSINESS_CLEARED"
+  ) {
+    console.log("🟢 DROWSINESS CLEARED");
+
+    drowsinessAlertActiveRef.current = false;
+
+    setDrowsinessStatus("NORMAL");
+    setDrowsinessAlertActive(false);
+    setDrowsinessAlertMessage("No active alerts.");
+    setDrowsinessClosedDuration(null);
+    setDrowsinessConfidence(null);
+    setDrowsinessPeakConfidence(null);
+
+    if (
+      message.ear !== undefined &&
+      message.ear !== null
+    ) {
+      setDrowsinessEar(message.ear);
+    }
+
+    return;
+  }
+
+  // ==========================================================
+  // PHONE ALERT — ONLY affects the phone domain. Must never
+  // touch drowsiness state.
+  // ==========================================================
+  if (
+    "type" in message &&
+    message.type === "PHONE_ALERT"
+  ) {
+    console.log(
+      "📱 PHONE ALERT RECEIVED:",
+      message
+    );
+
+    setPhoneStatus("PHONE_DETECTED");
+
+    setPhoneAlertActive(true);
+
+    setPhoneAlertMessage(
+      message.message ||
+        message.label ||
+        "Phone usage detected — immediate attention required."
+    );
+
+    setPhoneAlertTime(
+      message.timestamp ||
+        new Date().toISOString()
+    );
+
+    if (message.confidence !== undefined) {
+      setPhoneConfidence(message.confidence);
+    }
+
+    if (
+      message.peak_confidence !== undefined
+    ) {
+      setPhonePeakConfidence(
+        message.peak_confidence
+      );
+    }
+
+    playBeep();
+
+    return;
+  }
+
+  // ==========================================================
+  // PHONE CLEARED — ONLY affects the phone domain. Must never
+  // touch drowsiness state.
+  // ==========================================================
+  if (
+    "type" in message &&
+    message.type === "PHONE_CLEARED"
+  ) {
+    console.log("🟢 PHONE CLEARED");
+
+    setPhoneStatus("NORMAL");
+    setPhoneAlertActive(false);
+    setPhoneAlertMessage("No active alerts.");
+    setPhoneConfidence(null);
+    setPhonePeakConfidence(null);
+
+    return;
+  }
+
+  // ==========================================================
+  // DETECTION STATUS — routed by message.domain. `state` alone
+  // is never enough to tell drowsiness and phone apart.
+  // ==========================================================
   if (
     "type" in message &&
     message.type === "DETECTION_STATUS"
   ) {
-    setDriverStatus(message.status);
+    if (message.domain === "drowsiness") {
+      if (
+        message.ear !== undefined &&
+        message.ear !== null
+      ) {
+        setDrowsinessEar(message.ear);
+      }
 
-    if (message.ear !== undefined) {
-      setEar(message.ear);
+      if (message.state === "normal") {
+        if (drowsinessAlertActiveRef.current) {
+          console.log(
+            "Drowsiness alert remains active; ignoring normal detection status."
+          );
+
+          return;
+        }
+
+        setDrowsinessStatus("NORMAL");
+      }
+
+      return;
     }
 
-    if (message.status === "NORMAL") {
-      setAlertActive(false);
-      setAlertMessage("No active alerts.");
-      setClosedDuration(null);
+    if (message.domain === "phone") {
+      if (message.state === "normal") {
+        setPhoneStatus("NORMAL");
+      }
+
+      if (message.state === "phone_detected") {
+        setPhoneStatus("PHONE_DETECTED");
+      }
+
+      return;
     }
 
     return;
@@ -325,6 +490,9 @@ export default function DashboardPage() {
   // ============================================================
   // UI
   // ============================================================
+
+  const anyAlertActive =
+    drowsinessAlertActive || phoneAlertActive;
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
@@ -470,7 +638,8 @@ export default function DashboardPage() {
           </section>
 
           {/* ================================================== */}
-          {/* DRIVER STATUS */}
+          {/* DRIVER STATUS — drowsiness and phone are shown as  */}
+          {/* two independent domains, never merged.             */}
           {/* ================================================== */}
 
           <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
@@ -479,52 +648,93 @@ export default function DashboardPage() {
               Driver Status
             </h3>
 
-            <div
-              className={`mt-6 rounded-xl border p-6 text-center ${
-                driverStatus === "NORMAL"
-                  ? "border-emerald-900 bg-slate-950"
-                  : "border-red-900 bg-red-950/20"
-              }`}
-            >
+            <div className="mt-6 grid grid-cols-2 gap-3">
 
-              {/* STATUS ICON */}
+              {/* ============================================= */}
+              {/* DROWSINESS STATUS */}
+              {/* ============================================= */}
 
               <div
-                className={`mx-auto flex h-20 w-20 items-center justify-center rounded-full text-4xl ${
-                  driverStatus === "DROWSY"
-                    ? "bg-red-500/20"
-                    : "bg-emerald-500/10"
+                className={`rounded-xl border p-4 text-center ${
+                  drowsinessStatus === "NORMAL"
+                    ? "border-emerald-900 bg-slate-950"
+                    : "border-red-900 bg-red-950/20"
                 }`}
               >
 
-                {driverStatus ===
-                "DROWSY"
-                  ? "🚨"
-                  : "🟢"}
+                <div
+                  className={`mx-auto flex h-14 w-14 items-center justify-center rounded-full text-2xl ${
+                    drowsinessStatus === "DROWSY"
+                      ? "bg-red-500/20"
+                      : "bg-emerald-500/10"
+                  }`}
+                >
+
+                  {drowsinessStatus === "DROWSY"
+                    ? "🚨"
+                    : "🟢"}
+
+                </div>
+
+                <p className="mt-2 text-xs text-slate-500">
+                  Drowsiness
+                </p>
+
+                <h4
+                  className={`mt-1 text-lg font-bold ${
+                    drowsinessStatus === "NORMAL"
+                      ? "text-emerald-400"
+                      : "text-red-400"
+                  }`}
+                >
+                  {drowsinessStatus}
+                </h4>
 
               </div>
 
-              {/* STATUS */}
+              {/* ============================================= */}
+              {/* PHONE STATUS */}
+              {/* ============================================= */}
 
-              <h4
-                className={`mt-4 text-2xl font-bold ${
-                  driverStatus ===
-                  "NORMAL"
-                    ? "text-emerald-400"
-                    : "text-red-400"
+              <div
+                className={`rounded-xl border p-4 text-center ${
+                  phoneStatus === "NORMAL"
+                    ? "border-emerald-900 bg-slate-950"
+                    : "border-amber-900 bg-amber-950/20"
                 }`}
               >
-                {driverStatus}
-              </h4>
 
-              <p className="mt-2 text-sm text-slate-400">
+                <div
+                  className={`mx-auto flex h-14 w-14 items-center justify-center rounded-full text-2xl ${
+                    phoneStatus === "PHONE_DETECTED"
+                      ? "bg-amber-500/20"
+                      : "bg-emerald-500/10"
+                  }`}
+                >
 
-                {driverStatus ===
-                "NORMAL"
-                  ? "Driver behaviour is normal"
-                  : "Drowsiness detected — immediate attention required"}
+                  {phoneStatus === "PHONE_DETECTED"
+                    ? "📱"
+                    : "🟢"}
 
-              </p>
+                </div>
+
+                <p className="mt-2 text-xs text-slate-500">
+                  Phone Usage
+                </p>
+
+                <h4
+                  className={`mt-1 text-lg font-bold ${
+                    phoneStatus === "NORMAL"
+                      ? "text-emerald-400"
+                      : "text-amber-400"
+                  }`}
+                >
+                  {phoneStatus === "PHONE_DETECTED"
+                    ? "DETECTED"
+                    : "NORMAL"}
+                </h4>
+
+              </div>
 
             </div>
 
@@ -542,8 +752,8 @@ export default function DashboardPage() {
 
                 <span className="font-semibold">
 
-                  {ear !== null
-                    ? ear.toFixed(3)
+                  {drowsinessEar !== null
+                    ? drowsinessEar.toFixed(3)
                     : "--"}
 
                 </span>
@@ -601,134 +811,208 @@ export default function DashboardPage() {
         </div>
 
         {/* ==================================================== */}
-        {/* SAFETY ALERT */}
+        {/* SAFETY ALERTS — drowsiness and phone alerts are      */}
+        {/* rendered independently and can both be active at     */}
+        {/* the same time without overwriting each other.        */}
         {/* ==================================================== */}
 
         <section
           className={`mt-6 rounded-2xl border p-6 ${
-            alertActive
+            anyAlertActive
               ? "border-red-500/50 bg-red-950/40"
               : "border-slate-800 bg-slate-900"
           }`}
         >
 
-          <div className="flex items-start gap-4">
+          <div className="flex items-center justify-between">
 
-            {/* ALERT ICON */}
+            <h3 className="font-semibold">
+              Safety Alerts
+            </h3>
 
-            <div
-              className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-2xl ${
-                alertActive
-                  ? "bg-red-500/20"
-                  : "bg-slate-800"
-              }`}
-            >
+            {anyAlertActive && (
+              <span className="rounded-full bg-red-500/20 px-3 py-1 text-xs font-semibold text-red-400">
+                ACTIVE
+              </span>
+            )}
 
-              {alertActive
-                ? "🚨"
-                : "✓"}
+          </div>
 
-            </div>
+          {!anyAlertActive && (
+            <p className="mt-2 text-sm text-slate-400">
+              No active alerts.
+            </p>
+          )}
 
-            <div className="flex-1">
+          <div className="mt-4 space-y-4">
 
-              <div className="flex items-center justify-between">
+            {/* ================================================= */}
+            {/* DROWSINESS ALERT */}
+            {/* ================================================= */}
 
-                <h3 className="font-semibold">
-                  Safety Alerts
-                </h3>
+            {drowsinessAlertActive && (
+              <div className="flex items-start gap-4 rounded-xl bg-red-950/30 p-4">
 
-                {alertActive && (
-                  <span className="rounded-full bg-red-500/20 px-3 py-1 text-xs font-semibold text-red-400">
-                    ACTIVE
-                  </span>
-                )}
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-red-500/20 text-2xl">
+                  🚨
+                </div>
 
-              </div>
+                <div className="flex-1">
 
-              <p
-                className={`mt-1 text-sm ${
-                  alertActive
-                    ? "font-semibold text-red-400"
-                    : "text-slate-400"
-                }`}
-              >
-                {alertMessage}
-              </p>
+                  <p className="font-semibold text-red-400">
+                    {drowsinessAlertMessage}
+                  </p>
 
-              {/* ================================================= */}
-              {/* ACTIVE ALERT DETAILS */}
-              {/* ================================================= */}
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
 
-              {alertActive && (
-                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-lg bg-slate-900/70 p-3">
 
-                  <div className="rounded-lg bg-slate-900/70 p-3">
+                      <p className="text-xs text-slate-500">
+                        Status
+                      </p>
 
-                    <p className="text-xs text-slate-500">
-                      Status
-                    </p>
+                      <p className="mt-1 font-semibold text-red-400">
+                        DROWSY
+                      </p>
 
-                    <p className="mt-1 font-semibold text-red-400">
-                      DROWSY
-                    </p>
+                    </div>
+
+                    <div className="rounded-lg bg-slate-900/70 p-3">
+
+                      <p className="text-xs text-slate-500">
+                        EAR
+                      </p>
+
+                      <p className="mt-1 font-semibold">
+                        {drowsinessEar !== null
+                          ? drowsinessEar.toFixed(3)
+                          : "--"}
+                      </p>
+
+                    </div>
+
+                    <div className="rounded-lg bg-slate-900/70 p-3">
+
+                      <p className="text-xs text-slate-500">
+                        Eyes Closed
+                      </p>
+
+                      <p className="mt-1 font-semibold">
+
+                        {drowsinessClosedDuration !== null
+                          ? `${drowsinessClosedDuration.toFixed(
+                              2
+                            )}s`
+                          : "--"}
+
+                      </p>
+
+                    </div>
+
+                    {drowsinessConfidence !== null && (
+                      <div className="rounded-lg bg-slate-900/70 p-3">
+
+                        <p className="text-xs text-slate-500">
+                          Confidence
+                        </p>
+
+                        <p className="mt-1 font-semibold">
+
+                          {(drowsinessConfidence * 100).toFixed(0)}%
+                          {drowsinessPeakConfidence !== null &&
+                            ` (peak ${(drowsinessPeakConfidence * 100).toFixed(0)}%)`}
+
+                        </p>
+
+                      </div>
+                    )}
 
                   </div>
 
-                  <div className="rounded-lg bg-slate-900/70 p-3">
+                  {drowsinessAlertTime && (
+                    <p className="mt-3 text-xs text-slate-500">
 
-                    <p className="text-xs text-slate-500">
-                      EAR
-                    </p>
+                      Alert received:{" "}
 
-                    <p className="mt-1 font-semibold">
-                      {ear !== null
-                        ? ear.toFixed(3)
-                        : "--"}
-                    </p>
-
-                  </div>
-
-                  <div className="rounded-lg bg-slate-900/70 p-3">
-
-                    <p className="text-xs text-slate-500">
-                      Eyes Closed
-                    </p>
-
-                    <p className="mt-1 font-semibold">
-
-                      {closedDuration !==
-                      null
-                        ? `${closedDuration.toFixed(
-                            2
-                          )}s`
-                        : "--"}
+                      {new Date(
+                        drowsinessAlertTime
+                      ).toLocaleTimeString()}
 
                     </p>
-
-                  </div>
+                  )}
 
                 </div>
-              )}
 
-              {/* ================================================= */}
-              {/* ALERT TIME */}
-              {/* ================================================= */}
+              </div>
+            )}
 
-              {alertActive &&
-                alertTime && (
-                  <p className="mt-3 text-xs text-slate-500">
+            {/* ================================================= */}
+            {/* PHONE ALERT */}
+            {/* ================================================= */}
 
-                    Alert received:{" "}
+            {phoneAlertActive && (
+              <div className="flex items-start gap-4 rounded-xl bg-amber-950/30 p-4">
 
-                    {new Date(
-                      alertTime
-                    ).toLocaleTimeString()}
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-amber-500/20 text-2xl">
+                  📱
+                </div>
 
+                <div className="flex-1">
+
+                  <p className="font-semibold text-amber-400">
+                    {phoneAlertMessage}
                   </p>
-                )}
 
-            </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+
+                    <div className="rounded-lg bg-slate-900/70 p-3">
+
+                      <p className="text-xs text-slate-500">
+                        Status
+                      </p>
+
+                      <p className="mt-1 font-semibold text-amber-400">
+                        PHONE DETECTED
+                      </p>
+
+                    </div>
+
+                    {phoneConfidence !== null && (
+                      <div className="rounded-lg bg-slate-900/70 p-3">
+
+                        <p className="text-xs text-slate-500">
+                          Confidence
+                        </p>
+
+                        <p className="mt-1 font-semibold">
+
+                          {(phoneConfidence * 100).toFixed(0)}%
+                          {phonePeakConfidence !== null &&
+                            ` (peak ${(phonePeakConfidence * 100).toFixed(0)}%)`}
+
+                        </p>
+
+                      </div>
+                    )}
+
+                  </div>
+
+                  {phoneAlertTime && (
+                    <p className="mt-3 text-xs text-slate-500">
+
+                      Alert received:{" "}
+
+                      {new Date(
+                        phoneAlertTime
+                      ).toLocaleTimeString()}
+
+                    </p>
+                  )}
+
+                </div>
+
+              </div>
+            )}
 
           </div>
 
